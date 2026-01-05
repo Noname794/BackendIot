@@ -11,6 +11,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManagerFactory;
+import java.security.KeyStore;
+
 @Service
 @Slf4j
 public class MqttService {
@@ -20,6 +25,12 @@ public class MqttService {
     
     @Value("${mqtt.broker.url:tcp://localhost:1883}")
     private String brokerUrl;
+    
+    @Value("${mqtt.username:}")
+    private String mqttUsername;
+    
+    @Value("${mqtt.password:}")
+    private String mqttPassword;
     
     @Value("${mqtt.client.id:smart_light_backend}")
     private String clientId;
@@ -46,6 +57,22 @@ public class MqttService {
         disconnect();
     }
     
+    private SSLSocketFactory getSSLSocketFactory() {
+        try {
+            // Use default trust store (includes common CA certificates)
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init((KeyStore) null); // Use default trust store
+            
+            SSLContext sslContext = SSLContext.getInstance("TLSv1.2");
+            sslContext.init(null, tmf.getTrustManagers(), new java.security.SecureRandom());
+            
+            return sslContext.getSocketFactory();
+        } catch (Exception e) {
+            log.error("Failed to create SSL socket factory: {}", e.getMessage());
+            return null;
+        }
+    }
+    
     private void connectToBroker() {
         try {
             log.info("Connecting to MQTT broker: {}", brokerUrl);
@@ -54,8 +81,27 @@ public class MqttService {
             MqttConnectOptions options = new MqttConnectOptions();
             options.setCleanSession(true);
             options.setAutomaticReconnect(true);
-            options.setConnectionTimeout(10);
+            options.setConnectionTimeout(30);
             options.setKeepAliveInterval(60);
+            
+            // Set username/password if provided (for HiveMQ Cloud)
+            if (mqttUsername != null && !mqttUsername.isEmpty()) {
+                options.setUserName(mqttUsername);
+                log.info("MQTT username configured: {}", mqttUsername);
+            }
+            if (mqttPassword != null && !mqttPassword.isEmpty()) {
+                options.setPassword(mqttPassword.toCharArray());
+                log.info("MQTT password configured");
+            }
+            
+            // Enable SSL/TLS for secure connections (ssl:// or mqtts://)
+            if (brokerUrl.startsWith("ssl://") || brokerUrl.startsWith("mqtts://")) {
+                SSLSocketFactory sslSocketFactory = getSSLSocketFactory();
+                if (sslSocketFactory != null) {
+                    options.setSocketFactory(sslSocketFactory);
+                    log.info("TLS/SSL enabled for MQTT connection");
+                }
+            }
             
             mqttClient.setCallback(new MqttCallback() {
                 @Override
